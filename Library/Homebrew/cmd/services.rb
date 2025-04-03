@@ -2,6 +2,8 @@
 # frozen_string_literal: true
 
 require "abstract_command"
+require "subcommand_framework"
+require "subcommand_services"
 require "services/system"
 require "services/commands/list"
 require "services/commands/cleanup"
@@ -94,97 +96,26 @@ module Homebrew
           Homebrew::Services::Cli.sudo_service_user = sudo_service_user
         end
 
-        # Parse arguments.
-        subcommand, *formulae = args.named
+        # Route the command to our new SubcommandServices module that implements
+        # the SubcommandFramework
 
-        no_named_formula_commands = [
-          *Homebrew::Services::Commands::List::TRIGGERS,
-          *Homebrew::Services::Commands::Cleanup::TRIGGERS,
-        ]
-        if no_named_formula_commands.include?(subcommand)
-          raise UsageError, "The `#{subcommand}` subcommand does not accept a formula argument!" if formulae.present?
-          raise UsageError, "The `#{subcommand}` subcommand does not accept the --all argument!" if args.all?
-        end
+        # Map the parsed args to an array of strings to pass to the SubcommandServices
+        # This is a temporary solution until we fully migrate to the new framework
+        argv = []
 
-        if args.file
-          file_commands = [
-            *Homebrew::Services::Commands::Start::TRIGGERS,
-            *Homebrew::Services::Commands::Run::TRIGGERS,
-            *Homebrew::Services::Commands::Restart::TRIGGERS,
-          ]
-          if file_commands.exclude?(subcommand)
-            raise UsageError, "The `#{subcommand}` subcommand does not accept the --file= argument!"
-          elsif args.all?
-            raise UsageError,
-                  "The `#{subcommand}` subcommand does not accept the --all and --file= arguments at the same time!"
-          end
-        end
+        # Add named args (subcommand and its arguments)
+        argv.concat(args.named)
 
-        unless Homebrew::Services::Commands::Stop::TRIGGERS.include?(subcommand)
-          raise UsageError, "The `#{subcommand}` subcommand does not accept the --keep argument!" if args.keep?
-          raise UsageError, "The `#{subcommand}` subcommand does not accept the --no-wait argument!" if args.no_wait?
-          if args.max_wait
-            raise UsageError, "The `#{subcommand}` subcommand does not accept the --max-wait= argument!"
-          end
-        end
+        # Add option flags
+        argv << "--file=#{args.file}" if args.file
+        argv << "--sudo-service-user=#{args.sudo_service_user}" if args.sudo_service_user
+        argv << "--max-wait=#{args.max_wait}" if args.max_wait
+        argv << "--all" if args.all?
+        argv << "--json" if args.json?
+        argv << "--no-wait" if args.no_wait?
+        argv << "--keep" if args.keep?
 
-        opoo "The --all argument overrides provided formula argument!" if formulae.present? && args.all?
-
-        targets = if args.all?
-          if subcommand == "start"
-            Homebrew::Services::Formulae.available_services(
-              loaded:    false,
-              skip_root: !Homebrew::Services::System.root?,
-            )
-          elsif subcommand == "stop"
-            Homebrew::Services::Formulae.available_services(
-              loaded:    true,
-              skip_root: !Homebrew::Services::System.root?,
-            )
-          else
-            Homebrew::Services::Formulae.available_services
-          end
-        elsif formulae.present?
-          formulae.map { |formula| Homebrew::Services::FormulaWrapper.new(Formulary.factory(formula)) }
-        else
-          []
-        end
-
-        # Exit successfully if --all was used but there is nothing to do
-        return if args.all? && targets.empty?
-
-        if Homebrew::Services::System.systemctl?
-          ENV["DBUS_SESSION_BUS_ADDRESS"] = ENV.fetch("HOMEBREW_DBUS_SESSION_BUS_ADDRESS", nil)
-          ENV["XDG_RUNTIME_DIR"] = ENV.fetch("HOMEBREW_XDG_RUNTIME_DIR", nil)
-        end
-
-        # Dispatch commands and aliases.
-        case subcommand.presence
-        when *Homebrew::Services::Commands::List::TRIGGERS
-          Homebrew::Services::Commands::List.run(json: args.json?)
-        when *Homebrew::Services::Commands::Cleanup::TRIGGERS
-          Homebrew::Services::Commands::Cleanup.run
-        when *Homebrew::Services::Commands::Info::TRIGGERS
-          Homebrew::Services::Commands::Info.run(targets, verbose: args.verbose?, json: args.json?)
-        when *Homebrew::Services::Commands::Restart::TRIGGERS
-          Homebrew::Services::Commands::Restart.run(targets, args.file, verbose: args.verbose?)
-        when *Homebrew::Services::Commands::Run::TRIGGERS
-          Homebrew::Services::Commands::Run.run(targets, args.file, verbose: args.verbose?)
-        when *Homebrew::Services::Commands::Start::TRIGGERS
-          Homebrew::Services::Commands::Start.run(targets, args.file, verbose: args.verbose?)
-        when *Homebrew::Services::Commands::Stop::TRIGGERS
-          Homebrew::Services::Commands::Stop.run(
-            targets,
-            verbose:  args.verbose?,
-            no_wait:  args.no_wait?,
-            max_wait: args.max_wait.to_f,
-            keep:     args.keep?,
-          )
-        when *Homebrew::Services::Commands::Kill::TRIGGERS
-          Homebrew::Services::Commands::Kill.run(targets, verbose: args.verbose?)
-        else
-          raise UsageError, "unknown subcommand: `#{subcommand}`"
-        end
+        SubcommandServices.route_subcommand(argv)
       end
     end
   end

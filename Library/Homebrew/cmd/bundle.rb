@@ -2,6 +2,8 @@
 # frozen_string_literal: true
 
 require "abstract_command"
+require "subcommand_framework"
+require "subcommand_bundle"
 
 module Homebrew
   module Cmd
@@ -45,10 +47,10 @@ module Homebrew
           `brew bundle edit`:
           Edit the `Brewfile` in your editor.
 
-          `brew bundle add` <name> [...]:
+          `brew bundle add` <n> [...]:
           Add entries to your `Brewfile`. Adds formulae by default. Use `--cask`, `--tap`, `--whalebrew` or `--vscode` to add the corresponding entry instead.
 
-          `brew bundle remove` <name> [...]:
+          `brew bundle remove` <n> [...]:
           Remove entries that match `name` from your `Brewfile`. Use `--formula`, `--cask`, `--tap`, `--mas`, `--whalebrew` or `--vscode` to remove only entries of the corresponding type. Passing `--formula` also removes matches against formula aliases and old formula names.
 
           `brew bundle exec` <command>:
@@ -62,6 +64,7 @@ module Homebrew
           `brew bundle env`:
           Print the environment variables that would be set in a `brew bundle exec` environment.
         EOS
+        # Global options
         flag "--file=",
              description: "Read from or write to the `Brewfile` from this location. " \
                           "Use `--file=-` to pipe to stdin/stdout."
@@ -129,159 +132,46 @@ module Homebrew
         conflicts "--vscode", "--no-vscode"
         conflicts "--install", "--upgrade"
 
-        named_args %w[install dump cleanup check exec list sh env edit]
+        named_args %w[install dump cleanup check exec list sh env edit add remove]
       end
 
       sig { override.void }
       def run
         # Keep this inside `run` to keep --help fast.
-        require "bundle"
+        # Route the command to our new SubcommandBundle module that implements
+        # the SubcommandFramework
 
-        subcommand = args.named.first.presence
-        if %w[exec add remove].exclude?(subcommand) && args.named.size > 1
-          raise UsageError, "This command does not take more than 1 subcommand argument."
-        end
+        # Map the parsed args to an array of strings to pass to the SubcommandBundle
+        # This is a temporary solution until we fully migrate to the new framework
+        argv = []
 
-        global = args.global?
-        file = args.file
-        args.zap?
-        no_upgrade = if args.upgrade? || subcommand == "upgrade"
-          false
-        else
-          args.no_upgrade?
-        end
-        verbose = args.verbose?
-        force = args.force?
-        zap = args.zap?
-        Homebrew::Bundle.upgrade_formulae = args.upgrade_formulae
+        # Add named args (subcommand and its arguments)
+        argv.concat(args.named)
 
-        no_type_args = !args.brews? && !args.casks? && !args.taps? && !args.mas? && !args.whalebrew? && !args.vscode?
+        # Add option flags
+        argv << "--file=#{args.file}" if args.file
+        argv << "--global" if args.global?
+        argv << "--verbose" if args.verbose?
+        argv << "--no-upgrade" if args.no_upgrade?
+        argv << "--upgrade" if args.upgrade?
+        argv << "--upgrade-formulae=#{args.upgrade_formulae}" if args.upgrade_formulae
+        argv << "--install" if args.install?
+        argv << "--services" if args.services?
+        argv << "--force" if args.force?
+        argv << "--cleanup" if args.cleanup?
+        argv << "--all" if args.all?
+        argv << "--formula" if args.brews?
+        argv << "--cask" if args.casks?
+        argv << "--tap" if args.taps?
+        argv << "--mas" if args.mas?
+        argv << "--whalebrew" if args.whalebrew?
+        argv << "--vscode" if args.vscode?
+        argv << "--no-vscode" if args.no_vscode?
+        argv << "--describe" if args.describe?
+        argv << "--no-restart" if args.no_restart?
+        argv << "--zap" if args.zap?
 
-        if args.install?
-          if [nil, "install", "upgrade"].include?(subcommand)
-            raise UsageError, "`--install` cannot be used with `install`, `upgrade` or no subcommand."
-          end
-
-          require "bundle/commands/install"
-          redirect_stdout($stderr) do
-            Homebrew::Bundle::Commands::Install.run(global:, file:, no_upgrade:, verbose:, force:, quiet: true)
-          end
-        end
-
-        case subcommand
-        when nil, "install", "upgrade"
-          require "bundle/commands/install"
-          Homebrew::Bundle::Commands::Install.run(global:, file:, no_upgrade:, verbose:, force:, quiet: args.quiet?)
-
-          cleanup = if ENV.fetch("HOMEBREW_BUNDLE_INSTALL_CLEANUP", nil)
-            args.global?
-          else
-            args.cleanup?
-          end
-
-          if cleanup
-            require "bundle/commands/cleanup"
-            Homebrew::Bundle::Commands::Cleanup.run(
-              global:, file:, zap:,
-              force:  true,
-              dsl:    Homebrew::Bundle::Commands::Install.dsl
-            )
-          end
-        when "dump"
-          vscode = if args.no_vscode?
-            false
-          elsif args.vscode?
-            true
-          else
-            no_type_args
-          end
-
-          require "bundle/commands/dump"
-          Homebrew::Bundle::Commands::Dump.run(
-            global:, file:, force:,
-            describe:   args.describe?,
-            no_restart: args.no_restart?,
-            taps:       args.taps? || no_type_args,
-            brews:      args.brews? || no_type_args,
-            casks:      args.casks? || no_type_args,
-            mas:        args.mas? || no_type_args,
-            whalebrew:  args.whalebrew? || no_type_args,
-            vscode:
-          )
-        when "edit"
-          require "bundle/brewfile"
-          exec_editor(Homebrew::Bundle::Brewfile.path(global:, file:))
-        when "cleanup"
-          require "bundle/commands/cleanup"
-          Homebrew::Bundle::Commands::Cleanup.run(global:, file:, force:, zap:)
-        when "check"
-          require "bundle/commands/check"
-          Homebrew::Bundle::Commands::Check.run(global:, file:, no_upgrade:, verbose:)
-        when "exec", "sh", "env"
-          named_args = case subcommand
-          when "exec"
-            _subcommand, *named_args = args.named
-            named_args
-          when "sh"
-            preferred_path = Utils::Shell.preferred_path(default: "/bin/bash")
-            notice = unless Homebrew::EnvConfig.no_env_hints?
-              <<~EOS
-                Your shell has been configured to use a build environment from your `Brewfile`.
-                This should help you build stuff.
-                Hide these hints with HOMEBREW_NO_ENV_HINTS (see `man brew`).
-                When done, type `exit`.
-              EOS
-            end
-            ENV["HOMEBREW_FORCE_API_AUTO_UPDATE"] = nil
-            [Utils::Shell.shell_with_prompt("brew bundle", preferred_path:, notice:)]
-          when "env"
-            ["env"]
-          end
-          require "bundle/commands/exec"
-          Homebrew::Bundle::Commands::Exec.run(*named_args, global:, file:, subcommand:, services: args.services?)
-        when "list"
-          require "bundle/commands/list"
-          Homebrew::Bundle::Commands::List.run(
-            global:,
-            file:,
-            brews:     args.brews? || args.all? || no_type_args,
-            casks:     args.casks? || args.all?,
-            taps:      args.taps? || args.all?,
-            mas:       args.mas? || args.all?,
-            whalebrew: args.whalebrew? || args.all?,
-            vscode:    args.vscode? || args.all?,
-          )
-        when "add", "remove"
-          # We intentionally omit the `s` from `brews`, `casks`, and `taps` for ease of handling later.
-          type_hash = {
-            brew:      args.brews?,
-            cask:      args.casks?,
-            tap:       args.taps?,
-            mas:       args.mas?,
-            whalebrew: args.whalebrew?,
-            vscode:    args.vscode?,
-            none:      no_type_args,
-          }
-          selected_types = type_hash.select { |_, v| v }.keys
-          raise UsageError, "`#{subcommand}` supports only one type of entry at a time." if selected_types.count != 1
-
-          _, *named_args = args.named
-          if subcommand == "add"
-            type = case (t = selected_types.first)
-            when :none then :brew
-            when :mas then raise UsageError, "`add` does not support `--mas`."
-            else t
-            end
-
-            require "bundle/commands/add"
-            Homebrew::Bundle::Commands::Add.run(*named_args, type:, global:, file:)
-          else
-            require "bundle/commands/remove"
-            Homebrew::Bundle::Commands::Remove.run(*named_args, type: selected_types.first, global:, file:)
-          end
-        else
-          raise UsageError, "unknown subcommand: #{subcommand}"
-        end
+        SubcommandBundle.route_subcommand(argv)
       end
     end
   end
