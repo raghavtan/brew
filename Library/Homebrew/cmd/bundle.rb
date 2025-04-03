@@ -1,11 +1,11 @@
 # typed: strict
 # frozen_string_literal: true
 
-require "abstract_command"
+require "subcommandable_command"
 
 module Homebrew
   module Cmd
-    class Bundle < AbstractCommand
+    class Bundle < SubcommandableCommand
       cmd_args do
         usage_banner <<~EOS
           `bundle` [<subcommand>]
@@ -62,6 +62,8 @@ module Homebrew
           `brew bundle env`:
           Print the environment variables that would be set in a `brew bundle exec` environment.
         EOS
+
+        # Global options for all subcommands
         flag "--file=",
              description: "Read from or write to the `Brewfile` from this location. " \
                           "Use `--file=-` to pipe to stdin/stdout."
@@ -130,6 +132,156 @@ module Homebrew
         conflicts "--install", "--upgrade"
 
         named_args %w[install dump cleanup check exec list sh env edit]
+      end
+
+      # Define all the subcommands
+      subcommand "install", default: true do
+        description "Install and upgrade (by default) all dependencies from the Brewfile."
+
+        switch "--no-upgrade",
+               env:         :bundle_no_upgrade,
+               description: "Don't run `brew upgrade` on outdated dependencies. " \
+                            "Note they may still be upgraded by `brew install` if needed. " \
+                            "This is enabled by default if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set."
+        switch "--upgrade",
+               description: "Run `brew upgrade` on outdated dependencies, " \
+                            "even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set."
+        flag "--upgrade-formulae=", "--upgrade-formula=",
+             description: "Run `brew upgrade` on any of these comma-separated formulae, " \
+                          "even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set."
+        switch "-f", "--force",
+               description: "Run with `--force`/`--overwrite`."
+        switch "--cleanup",
+               env:         :bundle_install_cleanup,
+               description: "Perform cleanup operation, same as running `cleanup --force`. " \
+                            "This is enabled by default if `$HOMEBREW_BUNDLE_INSTALL_CLEANUP` is set and " \
+                            "`--global` is passed."
+      end
+
+      subcommand "upgrade" do
+        description "Shorthand for `brew bundle install --upgrade`."
+      end
+
+      subcommand "dump" do
+        description "Write all installed casks/formulae/images/taps into a Brewfile in the current directory."
+
+        switch "-f", "--force",
+               description: "Overwrite an existing `Brewfile`."
+        switch "--describe",
+               env:         :bundle_dump_describe,
+               description: "Add a description comment above each line, unless the " \
+                            "dependency does not have a description. " \
+                            "This is enabled by default if `$HOMEBREW_BUNDLE_DUMP_DESCRIBE` is set."
+        switch "--no-restart",
+               description: "Don't add `restart_service` to formula lines."
+        switch "--all",
+               description: "Dump all dependencies."
+        switch "--formula", "--brews",
+               description: "Dump Homebrew formula dependencies."
+        switch "--cask", "--casks",
+               description: "Dump Homebrew cask dependencies."
+        switch "--tap", "--taps",
+               description: "Dump Homebrew tap dependencies."
+        switch "--mas",
+               description: "Dump Mac App Store dependencies."
+        switch "--whalebrew",
+               description: "Dump Whalebrew dependencies."
+        switch "--vscode",
+               description: "Dump VSCode (and forks/variants) extensions."
+        switch "--no-vscode",
+               env:         :bundle_dump_no_vscode,
+               description: "Dump without VSCode (and forks/variants) extensions. " \
+                            "This is enabled by default if `$HOMEBREW_BUNDLE_DUMP_NO_VSCODE` is set."
+      end
+
+      subcommand "cleanup" do
+        description "Uninstall all dependencies not present in the Brewfile."
+
+        switch "-f", "--force",
+               description: "Actually perform the cleanup operations."
+        switch "--zap",
+               description: "Use the `zap` command instead of `uninstall` for casks."
+      end
+
+      subcommand "check" do
+        description "Check if all dependencies present in the Brewfile are installed."
+
+        switch "--no-upgrade",
+               env:         :bundle_no_upgrade,
+               description: "Don't check for outdated dependencies. " \
+                            "This is enabled by default if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set."
+      end
+
+      subcommand "exec" do
+        description "Run an external command in an isolated build environment."
+
+        switch "--services",
+               description: "Temporarily start services while running the command."
+      end
+
+      subcommand "list" do
+        description "List all dependencies present in the Brewfile."
+
+        switch "--all",
+               description: "List all dependencies."
+        switch "--formula", "--brews",
+               description: "List Homebrew formula dependencies."
+        switch "--cask", "--casks",
+               description: "List Homebrew cask dependencies."
+        switch "--tap", "--taps",
+               description: "List Homebrew tap dependencies."
+        switch "--mas",
+               description: "List Mac App Store dependencies."
+        switch "--whalebrew",
+               description: "List Whalebrew dependencies."
+        switch "--vscode",
+               description: "List VSCode (and forks/variants) extensions."
+      end
+
+      subcommand "edit" do
+        description "Edit the Brewfile in your editor."
+      end
+
+      subcommand "add" do
+        description "Add entries to your Brewfile."
+
+        switch "--formula", "--brews",
+               description: "Add Homebrew formula dependencies."
+        switch "--cask", "--casks",
+               description: "Add Homebrew cask dependencies."
+        switch "--tap", "--taps",
+               description: "Add Homebrew tap dependencies."
+        switch "--mas",
+               description: "Add Mac App Store dependencies."
+        switch "--whalebrew",
+               description: "Add Whalebrew dependencies."
+        switch "--vscode",
+               description: "Add VSCode (and forks/variants) extensions."
+      end
+
+      subcommand "remove" do
+        description "Remove entries that match name from your Brewfile."
+
+        switch "--formula", "--brews",
+               description: "Remove Homebrew formula dependencies."
+        switch "--cask", "--casks",
+               description: "Remove Homebrew cask dependencies."
+        switch "--tap", "--taps",
+               description: "Remove Homebrew tap dependencies."
+        switch "--mas",
+               description: "Remove Mac App Store dependencies."
+        switch "--whalebrew",
+               description: "Remove Whalebrew dependencies."
+        switch "--vscode",
+               description: "Remove VSCode (and forks/variants) extensions."
+      end
+
+      subcommand "sh" do
+        description "Run your shell in a brew bundle exec environment."
+      end
+
+      subcommand "env" do
+        description "Print the environment variables for a brew bundle exec environment."
       end
 
       sig { override.void }
@@ -281,6 +433,54 @@ module Homebrew
           end
         else
           raise UsageError, "unknown subcommand: #{subcommand}"
+        end
+      end
+
+      # Special case: Upgrade is an alias for install --upgrade
+      sig { override.void }
+      def dispatch_subcommand(subcommand, subcommand_args)
+        # Handle special case for upgrade, which is just install with --upgrade
+        if subcommand.name == "upgrade"
+          install_subcommand = self.class.subcommands["install"]
+
+          # Create a new CLI::Args with the upgrade flag set
+          upgrade_args = install_subcommand.parser.parse(ARGV + ["--upgrade"])
+
+          # Load and dispatch to the install subcommand implementation
+          module_for_subcommand("install").run(upgrade_args)
+          return
+        end
+
+        # Find the subcommand implementation and run it
+        implementation = module_for_subcommand(subcommand.name)
+        if implementation
+          implementation.run(subcommand_args)
+        else
+          # Handle simple subcommands like 'edit' directly
+          case subcommand.name
+          when "edit"
+            require "bundle/brewfile"
+            exec_editor(Homebrew::Bundle::Brewfile.path(global: subcommand_args.global?, file: subcommand_args.file))
+          else
+            super # Let the parent class handle it
+          end
+        end
+      end
+
+      private
+
+      sig { params(subcommand_name: String).returns(T.nilable(Module)) }
+      def module_for_subcommand(subcommand_name)
+        # Try to find the module for this subcommand
+        begin
+          # Require the subcommand file
+          require "cmd/bundle/#{subcommand_name.tr('-', '_')}"
+
+          # Get the corresponding module (assuming the module name matches the subcommand name)
+          module_name = subcommand_name.split("-").map(&:capitalize).join
+          Homebrew.const_get(module_name)
+        rescue LoadError, NameError
+          nil
         end
       end
     end

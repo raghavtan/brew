@@ -34,6 +34,9 @@ module Homebrew
       sig { returns(ArgType) }
       attr_reader :named_args_type
 
+      sig { returns(T.nilable(String)) }
+      attr_reader :subcommand_name
+
       sig { params(cmd_path: Pathname).returns(T.nilable(CLI::Parser)) }
       def self.from_cmd_path(cmd_path)
         cmd_args_method_name = Commands.args_method_name(cmd_path)
@@ -200,10 +203,14 @@ module Homebrew
 
       sig {
         params(names: String, description: T.nilable(String), replacement: T.untyped, env: T.untyped,
-               depends_on: T.nilable(String), method: Symbol, hidden: T::Boolean, disable: T::Boolean).void
+               depends_on: T.nilable(String), method: Symbol, hidden: T::Boolean, disable: T::Boolean,
+               subcommand: T.nilable(String)).void
       }
       def switch(*names, description: nil, replacement: nil, env: nil, depends_on: nil,
-                 method: :on, hidden: false, disable: false)
+                 method: :on, hidden: false, disable: false, subcommand: nil)
+        # Skip if this switch is for a different subcommand
+        return if subcommand && @subcommand_name && subcommand != @subcommand_name
+
         global_switch = names.first.is_a?(Symbol)
         return if global_switch
 
@@ -231,6 +238,41 @@ module Homebrew
       end
       alias switch_option switch
 
+      sig {
+        params(names: String, description: T.nilable(String), replacement: T.untyped, depends_on: T.nilable(String),
+               hidden: T::Boolean, subcommand: T.nilable(String)).void
+      }
+      def flag(*names, description: nil, replacement: nil, depends_on: nil, hidden: false, subcommand: nil)
+        # Skip if this flag is for a different subcommand
+        return if subcommand && @subcommand_name && subcommand != @subcommand_name
+
+        required, flag_type = if names.any? { |name| name.end_with? "=" }
+          [true, :required]
+        else
+          [false, :optional]
+        end
+
+        names.map! { |name| name.chomp "=" }
+        description = option_description(description, *names, hidden:)
+        process_option(*names, description, type: :flag, hidden:)
+
+        if replacement
+          description += " (deprecated; replaced by #{replacement})"
+        end
+
+        @parser.on(*names, *wrap_option_desc(description), flag_type) do |value|
+          odeprecated "the `#{names.first}` flag", replacement if replacement
+
+          names.each do |name|
+            set_args_method option_to_name(name), value
+          end
+        end
+
+        names.each do |name|
+          set_constraints(name, depends_on:)
+        end
+      end
+
       sig { params(text: T.nilable(String)).returns(T.nilable(String)) }
       def description(text = nil)
         return @description if text.blank?
@@ -253,36 +295,6 @@ module Homebrew
         process_option(name, description, type: :comma_array, hidden:)
         @parser.on(name, OptionParser::REQUIRED_ARGUMENT, Array, *wrap_option_desc(description)) do |list|
           set_args_method(option_to_name(name).to_sym, list)
-        end
-      end
-
-      sig {
-        params(names: String, description: T.nilable(String), replacement: T.any(Symbol, String, NilClass),
-               depends_on: T.nilable(String), hidden: T::Boolean).void
-      }
-      def flag(*names, description: nil, replacement: nil, depends_on: nil, hidden: false)
-        required, flag_type = if names.any? { |name| name.end_with? "=" }
-          [OptionParser::REQUIRED_ARGUMENT, :required_flag]
-        else
-          [OptionParser::OPTIONAL_ARGUMENT, :optional_flag]
-        end
-        names.map! { |name| name.chomp "=" }
-        description = option_description(description, *names, hidden:)
-        if replacement.nil?
-          process_option(*names, description, type: flag_type, hidden:)
-        else
-          description += " (disabled#{"; replaced by #{replacement}" if replacement.present?})"
-        end
-        @parser.on(*names, *wrap_option_desc(description), required) do |option_value|
-          # This odisabled should stick around indefinitely.
-          odisabled "the `#{names.first}` flag", replacement unless replacement.nil?
-          names.each do |name|
-            set_args_method(option_to_name(name).to_sym, option_value)
-          end
-        end
-
-        names.each do |name|
-          set_constraints(name, depends_on:)
         end
       end
 
@@ -493,6 +505,12 @@ module Homebrew
       sig { void }
       def hide_from_man_page!
         @hide_from_man_page = true
+      end
+
+      sig { params(subcommand_name: String).void }
+      def for_subcommand(subcommand_name)
+        @subcommand_name = subcommand_name
+        self
       end
 
       private
