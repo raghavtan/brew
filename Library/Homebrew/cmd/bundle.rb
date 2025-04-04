@@ -137,7 +137,7 @@ module Homebrew
       end
 
       # Define shared arguments that subcommands can inherit
-      sig { returns(T.nilable(T.proc.void)) }
+      sig { returns(T.nilable(T.proc.params(parser: CLI::Parser).void)) }
       def self.shared_args_block
         proc do |parser|
           parser.flag "--file=",
