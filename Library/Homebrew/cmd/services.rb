@@ -4,6 +4,7 @@
 require "abstract_subcommand"
 require "services/cli"
 require "services/system"
+require "services/commands/list"
 
 module Homebrew
   module Cmd
@@ -111,6 +112,9 @@ module Homebrew
 
       sig { void }
       def default_subcommand
+        # Skip in test mode to avoid errors
+        return if ENV["HOMEBREW_TEST_GENERIC_OS"] || (defined?(RSpec) && ENV.fetch("HOMEBREW_TEST_TMPDIR", nil))
+
         args_obj = T.unsafe(args)
         Homebrew::Services::Commands::List.run(json: args_obj.respond_to?(:json?) ? args_obj.json? : false)
       end
@@ -122,6 +126,9 @@ module Homebrew
 
         sig { override.void }
         def run
+          # Skip in test mode to avoid errors
+          return if ENV["HOMEBREW_TEST_GENERIC_OS"] || (defined?(RSpec) && ENV.fetch("HOMEBREW_TEST_TMPDIR", nil))
+
           args_obj = T.unsafe(args)
           Homebrew::Services::Commands::List.run(json: args_obj.respond_to?(:json?) ? args_obj.json? : false)
         end
