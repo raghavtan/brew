@@ -376,18 +376,12 @@ module Homebrew
           file_opt = args_obj.respond_to?(:file) ? args_obj.file : nil
           no_upgrade_opt = args_obj.respond_to?(:no_upgrade?) ? args_obj.no_upgrade? : false
           verbose_opt = args_obj.respond_to?(:verbose?) ? args_obj.verbose? : false
-
-          if ENV["HOMEBREW_TEST_GENERIC_OS"] || (defined?(RSpec) && ENV.fetch("HOMEBREW_TEST_TMPDIR", nil))
-            # Testing mode - output differently for the test compatibility
-            puts "The Brewfile's dependencies are satisfied."
-          else
-            Homebrew::Bundle::Commands::Check.run(
-              global:     global_opt,
-              file:       file_opt,
-              no_upgrade: no_upgrade_opt,
-              verbose:    verbose_opt,
-            )
-          end
+          Homebrew::Bundle::Commands::Check.run(
+            global:     global_opt,
+            file:       file_opt,
+            no_upgrade: no_upgrade_opt,
+            verbose:    verbose_opt,
+          )
         end
       end
 
