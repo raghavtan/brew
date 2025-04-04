@@ -1,16 +1,15 @@
 # typed: true
 # frozen_string_literal: true
 
-require "cli/parser"
-require "services"
 require "abstract_command"
 require "abstract_subcommand"
 require "subcommand_parser"
+require "services"
 require "services/system"
 
 module Homebrew
   module Cmd
-    class Services < AbstractCommand
+    class ServicesNew < AbstractCommand
       include AbstractSubcommandableMixin
       include SubcommandDispatchMixin
 
@@ -31,155 +30,8 @@ module Homebrew
                description: "Run <subcommand> on all services."
       end
 
-      # Define command-level arguments for the legacy implementation
-      cmd_args do
-        usage_banner <<~EOS
-          `services` [<subcommand>]
-
-          Manage background services with macOS' `launchctl`(1) daemon manager or
-          Linux's `systemctl`(1) service manager.
-        EOS
-
-        flag "--sudo-service-user=",
-             description: "When run as root on macOS, run the service(s) as this user."
-        flag "--file=",
-             description: "Use the service file from this location if it exists."
-        flag "--max-wait=",
-             description: "Wait at most this many seconds for a service to finish stopping " \
-                         "before restarting (or starting)."
-        switch "--all", description: "Run <subcommand> on all services."
-        switch "--no-wait", description: "Don't wait for services to finish stopping."
-        switch "--json", description: "Output as JSON."
-        switch "--keep", description: "When stopping, don't unload from the system manager."
-        # Feature flag for selecting between implementations
-        # This flag is now deprecated as the code has been merged
-        switch "--new-system", hidden: true, description: "Use the new subcommand system implementation."
-
-        conflicts "--max-wait=", "--no-wait"
-
-        named_args [:subcommand, :formula]
-      end
-
       sig { override.void }
       def run
-        args = Homebrew.services_args.parse if defined?(Homebrew.services_args)
-        args ||= self.args
-
-        # For backward compatibility, use the legacy implementation
-        # when not explicitly requesting the new system
-        if args.new_system? || ENV["HOMEBREW_USE_NEW_SUBCOMMAND_SYSTEM"]
-          run_new_system
-        else
-          run_legacy_system
-        end
-      end
-
-      private
-
-      def run_legacy_system
-        args = Homebrew.services_args.parse if defined?(Homebrew.services_args)
-        args ||= self.args
-
-        # Original implementation starts here
-        if OS.mac? && ENV.fetch("HOMEBREW_TMUX", nil) && File.exist?("/usr/bin/pbpaste") && !quiet_system("/usr/bin/pbpaste")
-          raise UsageError, "`brew services` cannot run under tmux!"
-        end
-
-        # pbpaste's exit status is a proxy for detecting the use of reattach-to-user-namespace
-        if !Services::System.launchctl? && !Services::System.systemctl?
-          raise UsageError, "`brew services` is supported only on macOS or Linux (with systemd)!"
-        end
-
-        if (sudo_service_user = args.sudo_service_user)
-          unless Services::System.root?
-            raise UsageError, "`brew services` is supported only when running as root!"
-          end
-
-          unless Services::System.launchctl?
-            raise UsageError,
-                  "`brew services --sudo-service-user` is currently supported only on macOS " \
-                  "(but we'd love a PR to add Linux support)!"
-          end
-
-          Services::Cli.sudo_service_user = sudo_service_user
-        end
-
-        if Services::System.systemctl?
-          ENV["DBUS_SESSION_BUS_ADDRESS"] = ENV.fetch("HOMEBREW_DBUS_SESSION_BUS_ADDRESS", nil)
-          ENV["XDG_RUNTIME_DIR"] = ENV.fetch("HOMEBREW_XDG_RUNTIME_DIR", nil)
-        end
-
-        subcommand = args.named.first
-        targets = args.named.drop(1).map { |formula| FormulaWrapper.new(Formulary.factory(formula)) }
-
-        if subcommand.nil?
-          # Default to `list` if no subcommand was given
-          # (and a non-existent formula wasn't provided)
-          subcommand = "list"
-        end
-
-        no_wait = args.no_wait?
-        max_wait = args.max_wait.to_f
-
-        # Create targets for all available services if `--all` was given
-        if args.all? && targets.empty?
-          targets =
-            if subcommand == "run" || subcommand == "start" || subcommand == "launch" || subcommand == "load"
-              Services::Formulae.available_services(loaded: false)
-            else
-              Services::Formulae.available_services(loaded: true)
-            end
-        end
-
-        case subcommand
-        when "list", "ls", "l"
-          Services::Commands::List.run(json: args.json?)
-        when "run"
-          wait = if no_wait
-            false
-          elsif max_wait.positive?
-            max_wait
-          else
-            true
-          end
-
-          # Default command, no need for a special case
-          if args.file.present?
-            Services::Commands::Run.run(file: args.file, wait: wait, verbose: args.verbose?)
-          elsif targets.present?
-            Services::Commands::Run.run(targets: targets, wait: wait, verbose: args.verbose?)
-          else
-            raise UsageError, "No targets specified. Please provide a service target (formula) or file."
-          end
-        when "start", "launch", "load", "s", "l"
-          Services::Commands::Start.run(targets, args.file, verbose: args.verbose?)
-        when "stop", "unload", "terminate", "t", "u"
-          Services::Commands::Stop.run(
-            targets,
-            verbose: args.verbose?,
-            no_wait: no_wait,
-            max_wait: max_wait,
-            keep: args.keep?,
-          )
-        when "restart", "relaunch", "reload", "r"
-          Services::Commands::Restart.run(
-            targets,
-            verbose: args.verbose?,
-            no_wait: no_wait,
-            max_wait: max_wait,
-          )
-        when "kill", "k"
-          Services::Commands::Kill.run(targets: targets, verbose: args.verbose?)
-        when "info", "i", "--info"
-          Services::Commands::Info.run(targets: targets, json: args.json?)
-        when "cleanup", "clean", "cl", "c"
-          Services::Commands::Cleanup.run(verbose: args.verbose?)
-        else
-          raise_invalid_subcommand_error!(subcommand)
-        end
-      end
-
-      def run_new_system
         # pbpaste's exit status is a proxy for detecting the use of reattach-to-user-namespace
         if OS.mac? && ENV.fetch("HOMEBREW_TMUX", nil) && File.exist?("/usr/bin/pbpaste") && !quiet_system("/usr/bin/pbpaste")
           raise UsageError, "`brew services` cannot run under tmux!"
@@ -226,16 +78,6 @@ module Homebrew
           raise UsageError, "Unknown subcommand: #{subcommand_name}"
         end
       end
-
-      def raise_invalid_subcommand_error!(subcommand)
-        error_message = if !Services::System.launchctl? && !Services::System.systemctl?
-          "`brew services` is supported only on macOS or Linux (with systemd)!"
-        else
-          "`#{subcommand}` is not a valid subcommand!"
-        end
-
-        raise UsageError, error_message
-      end
     end
   end
 end
@@ -243,7 +85,7 @@ end
 # Define the services subcommands as separate classes
 module Homebrew
   module Cmd
-    class Services
+    class ServicesNew
       # List subcommand
       class List < AbstractSubcommand
         cmd_args do
@@ -600,155 +442,16 @@ module Homebrew
   end
 end
 
-# Keep the module_function interface for backward compatibility
+# Special case hook for the main services command
+# This will be called by the command dispatcher when `brew services` is run
 module Homebrew
   module_function
 
-  def services_args
-    Homebrew::CLI::Parser.new do
-      usage_banner <<~EOS
-        `services` [<subcommand>]
-
-        Manage background services with macOS' `launchctl`(1) daemon manager or
-        Linux's `systemctl`(1) service manager.
-      EOS
-
-      flag "--sudo-service-user=",
-           description: "When run as root on macOS, run the service(s) as this user."
-      flag "--file=",
-           description: "Use the service file from this location if it exists."
-      flag "--max-wait=",
-           description: "Wait at most this many seconds for a service to finish stopping " \
-                       "before restarting (or starting)."
-      switch "--all", description: "Run <subcommand> on all services."
-      switch "--no-wait", description: "Don't wait for services to finish stopping."
-      switch "--json", description: "Output as JSON."
-      switch "--keep", description: "When stopping, don't unload from the system manager."
-      # Feature flag for selecting between implementations
-      switch "--new-system", description: "Use the new subcommand system implementation."
-
-      conflicts "--max-wait=", "--no-wait"
-
-      named_args [:subcommand, :formula]
-    end
+  def services_new_args
+    Cmd::ServicesNew.new.args
   end
 
-  def services
-    # Check if the --new-system flag is passed or the environment variable is set
-    if ARGV.include?("--new-system") || ENV["HOMEBREW_USE_NEW_SUBCOMMAND_SYSTEM"]
-      # Use the new implementation
-      require_relative "services_new"
-      services_new
-    else
-      # Use the original implementation
-      args = services_args.parse
-
-      if OS.mac? && ENV.fetch("HOMEBREW_TMUX", nil) && File.exist?("/usr/bin/pbpaste") && !quiet_system("/usr/bin/pbpaste")
-        raise UsageError, "`brew services` cannot run under tmux!"
-      end
-
-      # pbpaste's exit status is a proxy for detecting the use of reattach-to-user-namespace
-      if !Services::System.launchctl? && !Services::System.systemctl?
-        raise UsageError, "`brew services` is supported only on macOS or Linux (with systemd)!"
-      end
-
-      if (sudo_service_user = args.sudo_service_user)
-        unless Services::System.root?
-          raise UsageError, "`brew services` is supported only when running as root!"
-        end
-
-        unless Services::System.launchctl?
-          raise UsageError,
-                "`brew services --sudo-service-user` is currently supported only on macOS " \
-                "(but we'd love a PR to add Linux support)!"
-        end
-
-        Services::Cli.sudo_service_user = sudo_service_user
-      end
-
-      if Services::System.systemctl?
-        ENV["DBUS_SESSION_BUS_ADDRESS"] = ENV.fetch("HOMEBREW_DBUS_SESSION_BUS_ADDRESS", nil)
-        ENV["XDG_RUNTIME_DIR"] = ENV.fetch("HOMEBREW_XDG_RUNTIME_DIR", nil)
-      end
-
-      subcommand = args.named.first
-      targets = args.named.drop(1).map { |formula| FormulaWrapper.new(Formulary.factory(formula)) }
-
-      if subcommand.nil?
-        # Default to `list` if no subcommand was given
-        # (and a non-existent formula wasn't provided)
-        subcommand = "list"
-      end
-
-      no_wait = args.no_wait?
-      max_wait = args.max_wait.to_f
-
-      # Create targets for all available services if `--all` was given
-      if args.all? && targets.empty?
-        targets =
-          if subcommand == "run" || subcommand == "start" || subcommand == "launch" || subcommand == "load"
-            Services::Formulae.available_services(loaded: false)
-          else
-            Services::Formulae.available_services(loaded: true)
-          end
-      end
-
-      case subcommand
-      when "list", "ls", "l"
-        Services::Commands::List.run(json: args.json?)
-      when "run"
-        wait = if no_wait
-          false
-        elsif max_wait.positive?
-          max_wait
-        else
-          true
-        end
-
-        # Default command, no need for a special case
-        if args.file.present?
-          Services::Commands::Run.run(file: args.file, wait: wait, verbose: args.verbose?)
-        elsif targets.present?
-          Services::Commands::Run.run(targets: targets, wait: wait, verbose: args.verbose?)
-        else
-          raise UsageError, "No targets specified. Please provide a service target (formula) or file."
-        end
-      when "start", "launch", "load", "s", "l"
-        Services::Commands::Start.run(targets, args.file, verbose: args.verbose?)
-      when "stop", "unload", "terminate", "t", "u"
-        Services::Commands::Stop.run(
-          targets,
-          verbose: args.verbose?,
-          no_wait: no_wait,
-          max_wait: max_wait,
-          keep: args.keep?,
-        )
-      when "restart", "relaunch", "reload", "r"
-        Services::Commands::Restart.run(
-          targets,
-          verbose: args.verbose?,
-          no_wait: no_wait,
-          max_wait: max_wait,
-        )
-      when "kill", "k"
-        Services::Commands::Kill.run(targets: targets, verbose: args.verbose?)
-      when "info", "i", "--info"
-        Services::Commands::Info.run(targets: targets, json: args.json?)
-      when "cleanup", "clean", "cl", "c"
-        Services::Commands::Cleanup.run(verbose: args.verbose?)
-      else
-        raise_invalid_subcommand_error!(subcommand)
-      end
-    end
-  end
-
-  def raise_invalid_subcommand_error!(subcommand)
-    error_message = if !Services::System.launchctl? && !Services::System.systemctl?
-      "`brew services` is supported only on macOS or Linux (with systemd)!"
-    else
-      "`#{subcommand}` is not a valid subcommand!"
-    end
-
-    raise UsageError, error_message
+  def services_new
+    Cmd::ServicesNew.new.run
   end
 end
