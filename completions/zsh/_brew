@@ -672,7 +672,7 @@ _brew_bundle() {
     '--whalebrew[`list` or `dump` Whalebrew dependencies]' \
     '--zap[`cleanup` casks using the `zap` command instead of `uninstall`]' \
     - subcommand \
-    '*::subcommand:(install dump cleanup check exec list sh env edit add remove)'
+    '*::subcommand:(install dump cleanup check exec list sh env edit)'
 }
 
 # brew casks

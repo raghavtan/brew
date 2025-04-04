@@ -3,6 +3,7 @@
 
 require "abstract_subcommand"
 require "services/cli"
+require "services/system"
 
 module Homebrew
   module Cmd

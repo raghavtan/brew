@@ -49,10 +49,10 @@ module Homebrew
           `brew bundle edit`:
           Edit the `Brewfile` in your editor.
 
-          `brew bundle add` <n> [...]:
+          `brew bundle add` <name> [...]:
           Add entries to your `Brewfile`. Adds formulae by default. Use `--cask`, `--tap`, `--whalebrew` or `--vscode` to add the corresponding entry instead.
 
-          `brew bundle remove` <n> [...]:
+          `brew bundle remove` <name> [...]:
           Remove entries that match `name` from your `Brewfile`. Use `--formula`, `--cask`, `--tap`, `--mas`, `--whalebrew` or `--vscode` to remove only entries of the corresponding type. Passing `--formula` also removes matches against formula aliases and old formula names.
 
           `brew bundle exec` <command>:
@@ -133,11 +133,11 @@ module Homebrew
         conflicts "--vscode", "--no-vscode"
         conflicts "--install", "--upgrade"
 
-        named_args %w[install dump cleanup check exec list sh env edit add remove]
+        named_args %w[install dump cleanup check exec list sh env edit]
       end
 
       # Define shared arguments that subcommands can inherit
-      sig { returns(T.proc.params(parser: CLI::Parser).void) }
+      sig { returns(T.nilable(T.proc.void)) }
       def self.shared_args_block
         proc do |parser|
           parser.flag "--file=",
