@@ -3,11 +3,10 @@
 ## Overview
 The Homebrew subcommand system provides a modular approach to implementing commands with subcommands, organizing code into separate classes for each subcommand.
 
-
 ## Implementation Strategy
 1. **Current Phase**: Merged implementation with both systems
-   - Hidden `--new-system` flag
-   - `HOMEBREW_USE_NEW_SUBCOMMAND_SYSTEM` environment variable
+  - Hidden `--new-system` flag
+  - `HOMEBREW_USE_NEW_SUBCOMMAND_SYSTEM` environment variable
 2. **Future**: Transition to new system with eventual removal of legacy code
 
 ## Migration Steps
@@ -17,19 +16,20 @@ The Homebrew subcommand system provides a modular approach to implementing comma
 require "abstract_command"
 require "abstract_subcommand"
 require "subcommand_parser"
+require "command_options"
 
 module Homebrew
   module Cmd
     class YourCommand < AbstractCommand
-      include AbstractSubcommandableMixin
-      include SubcommandDispatchMixin
-      # Blah BLAh Blah
+      include AbstractSubcommandable
+      include SubcommandDispatcher
+      # ...
     end
   end
 end
 ```
 
-### 2. Implement Merged system
+### 2. Implement Merged System
 ```ruby
 def run
   if args.new_system? || ENV["HOMEBREW_USE_NEW_SUBCOMMAND_SYSTEM"]
@@ -62,7 +62,17 @@ end
 
 ### 3. Create Subcommand Classes
 ```ruby
-class Subcommand1 < AbstractSubcommand
+# Base class to share functionality between subcommands (optional)
+class CommandBaseSubcommand < AbstractSubcommand
+  private
+
+  def options
+    CommandOptions.new(args)
+  end
+end
+
+# Actual subcommand implementation
+class Subcommand1 < CommandBaseSubcommand
   cmd_args do
     usage_banner <<~EOS
       `your-command subcommand1` [<options>]
@@ -72,7 +82,26 @@ class Subcommand1 < AbstractSubcommand
   end
 
   def run
-    # Implement subcommand logic
+    # Implementation using parameter object instead of long parameter lists
+    options = CommandOptions.new(args)
+    YourModule::Commands::Subcommand1.run(
+      argument1: args.named.first,
+      **options.to_h
+    )
+  end
+end
+```
+
+### 4. For Commands Working with Targets (Formulae, Casks)
+```ruby
+# Include the TargetableCommand module
+class TargetSubcommand < AbstractSubcommand
+  include TargetableCommand
+
+  def run
+    targets = get_targets(loaded: true)
+    return if check_empty_targets(targets)
+    # Process targets...
   end
 end
 ```

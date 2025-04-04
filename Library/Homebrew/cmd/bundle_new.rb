@@ -4,14 +4,14 @@
 require "abstract_command"
 require "abstract_subcommand"
 require "subcommand_parser"
+require "command_options"
 
 module Homebrew
   module Cmd
     class BundleNew < AbstractCommand
-      include AbstractSubcommandableMixin
-      include SubcommandDispatchMixin
+      include AbstractSubcommandable
+      include SubcommandDispatcher
 
-      # Define shared arguments that apply to all bundle subcommands
       shared_args do
         usage_banner <<~EOS
           `bundle` [<subcommand>]
@@ -20,8 +20,7 @@ module Homebrew
         EOS
 
         flag "--file=",
-             description: "Read from or write to the `Brewfile` from this location. " \
-                          "Use `--file=-` to pipe to stdin/stdout."
+             description: "Read from or write to the `Brewfile` from this location."
         switch "--global",
                description: "Read from or write to the global Brewfile."
         switch "-v", "--verbose",
@@ -30,54 +29,48 @@ module Homebrew
 
       sig { override.void }
       def run
-        # Keep this inside `run` to keep --help fast.
         require "bundle"
 
-        # Parse and extract subcommand name and the remaining arguments
         subcommand_name, remaining_args = Homebrew::SubcommandParser.parse_subcommand(args.remaining_args, self)
 
-        # Handle the case where no subcommand is specified
         if subcommand_name.nil?
-          # Default to "install" if no subcommand is specified
-          dispatch_subcommand("install", remaining_args) || raise(UsageError, "No subcommand specified. Try `brew bundle install`")
+          dispatch_subcommand("install", remaining_args) || raise(UsageError, "No subcommand specified.")
           return
         end
 
-        # Dispatch to the appropriate subcommand
         unless dispatch_subcommand(subcommand_name, remaining_args)
           raise UsageError, "Unknown subcommand: #{subcommand_name}"
+        end
+      end
+
+      # Base class for bundle subcommands with common setup
+      class BundleBaseSubcommand < AbstractSubcommand
+        private
+
+        # Get common bundle options
+        sig { returns(CommandOptions) }
+        def bundle_options
+          CommandOptions.new(args)
         end
       end
     end
   end
 end
 
-# Define the bundle subcommands
 module Homebrew
   module Cmd
     class BundleNew
-      # Install subcommand
-      class Install < AbstractSubcommand
+      class Install < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle install`
-
-            Install and upgrade (by default) all dependencies from the `Brewfile`.
-
-            You can specify the `Brewfile` location using `--file` or by setting the `$HOMEBREW_BUNDLE_FILE` environment variable.
-
-            You can skip the installation of dependencies by adding space-separated values to one or more of the following environment variables: `$HOMEBREW_BUNDLE_BREW_SKIP`, `$HOMEBREW_BUNDLE_CASK_SKIP`, `$HOMEBREW_BUNDLE_MAS_SKIP`, `$HOMEBREW_BUNDLE_WHALEBREW_SKIP`, `$HOMEBREW_BUNDLE_TAP_SKIP`.
-          EOS
+          usage_banner "`bundle install`"
 
           switch "--no-upgrade",
                  env: :bundle_no_upgrade,
-                 description: "Don't run `brew upgrade` on outdated dependencies. " \
-                              "Note they may still be upgraded by `brew install` if needed."
+                 description: "Don't run `brew upgrade` on outdated dependencies."
           switch "--upgrade",
                  description: "Run `brew upgrade` even if `$HOMEBREW_BUNDLE_NO_UPGRADE` is set."
           flag "--upgrade-formulae=", "--upgrade-formula=",
-               description: "Run `brew upgrade` on these comma-separated formulae, even if " \
-                            "`$HOMEBREW_BUNDLE_NO_UPGRADE` is set."
+               description: "Run `brew upgrade` on these comma-separated formulae."
           switch "-f", "--force",
                  description: "Run `install` with `--force`/`--overwrite`."
           switch "--cleanup",
@@ -87,41 +80,28 @@ module Homebrew
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/install"
+          options = bundle_options
 
-          global = args.global?
-          file = args.file
-
-          no_upgrade = if args.upgrade?
-            false
-          else
-            args.no_upgrade?
-          end
-
-          verbose = args.verbose?
-          force = args.force?
+          no_upgrade = args.upgrade? ? false : args.no_upgrade?
           cleanup = args.cleanup?
 
-          # Set upgrade formulae if specified
           Homebrew::Bundle.upgrade_formulae = args.upgrade_formulae
 
-          # Run the install command
           Homebrew::Bundle::Commands::Install.run(
-            global: global,
-            file: file,
+            global: options.global,
+            file: options.file,
             no_upgrade: no_upgrade,
-            verbose: verbose,
-            force: force,
-            quiet: !verbose
+            verbose: options.verbose,
+            force: options.force,
+            quiet: !options.verbose
           )
 
-          # Run cleanup if specified
           if cleanup
             require "bundle/commands/cleanup"
             Homebrew::Bundle::Commands::Cleanup.run(
-              global: global,
-              file: file,
+              global: options.global,
+              file: options.file,
               force: true,
               zap: false,
               dsl: Homebrew::Bundle::Commands::Install.dsl
@@ -130,21 +110,15 @@ module Homebrew
         end
       end
 
-      # Dump subcommand
-      class Dump < AbstractSubcommand
+      class Dump < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle dump`
-
-            Write all installed casks/formulae/images/taps into a `Brewfile`.
-          EOS
+          usage_banner "`bundle dump`"
 
           switch "-f", "--force",
                  description: "Overwrite an existing `Brewfile`."
           switch "--describe",
                  env: :bundle_dump_describe,
-                 description: "Add description comments above each line, unless the " \
-                              "dependency does not have a description."
+                 description: "Add description comments above each line."
           switch "--no-restart",
                  description: "Do not add `restart_service` to formula lines."
           switch "--formula", "--brews",
@@ -171,28 +145,22 @@ module Homebrew
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/dump"
-
-          global = args.global?
-          file = args.file
-          force = args.force?
-
-          # Determine what to dump
+          options = bundle_options
           no_type_args = !args.brews? && !args.casks? && !args.taps? && !args.mas? && !args.whalebrew? && !args.vscode?
 
           vscode = if args.no_vscode?
-            false
-          elsif args.vscode?
-            true
-          else
-            no_type_args
-          end
+                     false
+                   elsif args.vscode?
+                     true
+                   else
+                     no_type_args
+                   end
 
           Homebrew::Bundle::Commands::Dump.run(
-            global: global,
-            file: file,
-            force: force,
+            global: options.global,
+            file: options.file,
+            force: options.force,
             describe: args.describe?,
             no_restart: args.no_restart?,
             taps: args.taps? || args.all? || no_type_args,
@@ -205,16 +173,9 @@ module Homebrew
         end
       end
 
-      # Cleanup subcommand
-      class Cleanup < AbstractSubcommand
+      class Cleanup < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle cleanup`
-
-            Uninstall all dependencies not present in the `Brewfile`.
-
-            This workflow is useful for maintainers or testers who regularly install lots of formulae.
-          EOS
+          usage_banner "`bundle cleanup`"
 
           switch "-f", "--force",
                  description: "Actually perform the cleanup operations."
@@ -224,31 +185,21 @@ module Homebrew
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/cleanup"
-
-          global = args.global?
-          file = args.file
-          force = args.force?
-          zap = args.zap?
+          options = bundle_options
 
           Homebrew::Bundle::Commands::Cleanup.run(
-            global: global,
-            file: file,
-            force: force,
-            zap: zap
+            global: options.global,
+            file: options.file,
+            force: options.force,
+            zap: options.zap
           )
         end
       end
 
-      # Check subcommand
-      class Check < AbstractSubcommand
+      class Check < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle check`
-
-            Check if all dependencies present in the `Brewfile` are installed.
-          EOS
+          usage_banner "`bundle check`"
 
           switch "--no-upgrade",
                  env: :bundle_no_upgrade,
@@ -257,31 +208,21 @@ module Homebrew
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/check"
-
-          global = args.global?
-          file = args.file
-          no_upgrade = args.no_upgrade?
-          verbose = args.verbose?
+          options = bundle_options
 
           Homebrew::Bundle::Commands::Check.run(
-            global: global,
-            file: file,
-            no_upgrade: no_upgrade,
-            verbose: verbose
+            global: options.global,
+            file: options.file,
+            no_upgrade: args.no_upgrade?,
+            verbose: options.verbose
           )
         end
       end
 
-      # List subcommand
-      class List < AbstractSubcommand
+      class List < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle list`
-
-            List all dependencies present in the `Brewfile`.
-          EOS
+          usage_banner "`bundle list`"
 
           switch "--all",
                  description: "List all dependencies."
@@ -301,17 +242,13 @@ module Homebrew
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/list"
-
-          global = args.global?
-          file = args.file
-
+          options = bundle_options
           no_type_args = !args.brews? && !args.casks? && !args.taps? && !args.mas? && !args.whalebrew? && !args.vscode?
 
           Homebrew::Bundle::Commands::List.run(
-            global: global,
-            file: file,
+            global: options.global,
+            file: options.file,
             all: args.all?,
             casks: args.casks?,
             taps: args.taps?,
@@ -323,86 +260,54 @@ module Homebrew
         end
       end
 
-      # Edit subcommand
-      class Edit < AbstractSubcommand
+      class Edit < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle edit`
-
-            Edit the `Brewfile` in your editor.
-          EOS
+          usage_banner "`bundle edit`"
         end
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/brewfile"
-
-          global = args.global?
-          file = args.file
-
-          exec_editor(Homebrew::Bundle::Brewfile.path(global: global, file: file))
+          options = bundle_options
+          exec_editor(Homebrew::Bundle::Brewfile.path(global: options.global, file: options.file))
         end
       end
 
-      # Exec subcommand
-      class Exec < AbstractSubcommand
+      class Exec < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle exec` <command>
-
-            Run an external command in an isolated build environment based on the `Brewfile` dependencies.
-          EOS
-
+          usage_banner "`bundle exec` <command>"
           switch "--services",
                  description: "Temporarily start services while running the command."
-
           named_args.unlimited
         end
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/exec"
-
-          global = args.global?
-          file = args.file
-          services = args.services?
-          named_args = args.named
+          options = bundle_options
 
           Homebrew::Bundle::Commands::Exec.run(
-            global: global,
-            file: file,
-            named_args: named_args,
-            services: services,
+            global: options.global,
+            file: options.file,
+            named_args: args.named,
+            services: args.services?,
             subcommand: :exec
           )
         end
       end
 
-      # Sh subcommand
-      class Sh < AbstractSubcommand
+      class Sh < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle sh`
-
-            Run your shell in a `brew bundle exec` environment.
-          EOS
-
+          usage_banner "`bundle sh`"
           switch "--services",
                  description: "Temporarily start services while running the shell."
         end
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/exec"
+          options = bundle_options
 
-          global = args.global?
-          file = args.file
-          services = args.services?
-
-          # Display a helpful notice if environment hints are enabled
           unless Homebrew::EnvConfig.no_env_hints?
             ohai <<~EOS
               Your shell has been configured to use a build environment from your `Brewfile`.
@@ -412,55 +317,40 @@ module Homebrew
           end
 
           Homebrew::Bundle::Commands::Exec.run(
-            global: global,
-            file: file,
+            global: options.global,
+            file: options.file,
             named_args: [],
-            services: services,
+            services: args.services?,
             subcommand: :sh
           )
         end
       end
 
-      # Env subcommand
-      class Env < AbstractSubcommand
+      class Env < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle env`
-
-            Print the environment variables that would be set in a `brew bundle exec` environment.
-          EOS
-
+          usage_banner "`bundle env`"
           switch "--services",
                  description: "Temporarily start services."
         end
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/exec"
-
-          global = args.global?
-          file = args.file
-          services = args.services?
+          options = bundle_options
 
           Homebrew::Bundle::Commands::Exec.run(
-            global: global,
-            file: file,
+            global: options.global,
+            file: options.file,
             named_args: [],
-            services: services,
+            services: args.services?,
             subcommand: :env
           )
         end
       end
 
-      # Add subcommand
-      class Add < AbstractSubcommand
+      class Add < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle add` <name> [...]
-
-            Add entries to your `Brewfile`.
-          EOS
+          usage_banner "`bundle add` <name> [...]"
 
           switch "--formula", "--brews",
                  description: "Add Homebrew formula dependencies."
@@ -480,16 +370,26 @@ module Homebrew
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/add"
+          options = bundle_options
 
-          global = args.global?
-          file = args.file
-          verbose = args.verbose?
-          named_args = args.named
+          type = determine_package_type
 
-          # Determine the type of dependency to add
-          type = if args.casks?
+          Homebrew::Bundle::Commands::Add.run(
+            global: options.global,
+            file: options.file,
+            verbose: options.verbose,
+            type: type,
+            named_args: args.named
+          )
+        end
+
+        private
+
+        # Determine the package type based on arguments
+        sig { returns(Symbol) }
+        def determine_package_type
+          if args.casks?
             :cask
           elsif args.mas?
             :mas
@@ -500,27 +400,14 @@ module Homebrew
           elsif args.taps?
             :tap
           else
-            :brew # formula is the default
+            :brew
           end
-
-          Homebrew::Bundle::Commands::Add.run(
-            global: global,
-            file: file,
-            verbose: verbose,
-            type: type,
-            named_args: named_args
-          )
         end
       end
 
-      # Remove subcommand
-      class Remove < AbstractSubcommand
+      class Remove < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle remove` <name> [...]
-
-            Remove entries from your `Brewfile`.
-          EOS
+          usage_banner "`bundle remove` <name> [...]"
 
           switch "--formula", "--brews",
                  description: "Remove Homebrew formula dependencies."
@@ -540,16 +427,26 @@ module Homebrew
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/remove"
+          options = bundle_options
 
-          global = args.global?
-          file = args.file
-          verbose = args.verbose?
-          named_args = args.named
+          type = determine_package_type
 
-          # Determine the type of dependency to remove
-          type = if args.casks?
+          Homebrew::Bundle::Commands::Remove.run(
+            global: options.global,
+            file: options.file,
+            verbose: options.verbose,
+            type: type,
+            named_args: args.named
+          )
+        end
+
+        private
+
+        # Determine the package type based on arguments
+        sig { returns(T.nilable(Symbol)) }
+        def determine_package_type
+          if args.casks?
             :cask
           elsif args.mas?
             :mas
@@ -561,47 +458,29 @@ module Homebrew
             :tap
           elsif args.brews?
             :brew
+          else
+            nil
           end
-
-          Homebrew::Bundle::Commands::Remove.run(
-            global: global,
-            file: file,
-            verbose: verbose,
-            type: type,
-            named_args: named_args
-          )
         end
       end
 
-      # Upgrade subcommand
-      class Upgrade < AbstractSubcommand
+      class Upgrade < BundleBaseSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `bundle upgrade`
-
-            Upgrade outdated dependencies from the Brewfile.
-            This is a shorthand for `brew bundle install --upgrade`.
-          EOS
+          usage_banner "`bundle upgrade`"
         end
 
         sig { override.void }
         def run
-          require "bundle"
           require "bundle/commands/install"
+          options = bundle_options
 
-          global = args.global?
-          file = args.file
-          verbose = args.verbose?
-          force = args.force?
-
-          # Run the install command with upgrade enabled
           Homebrew::Bundle::Commands::Install.run(
-            global: global,
-            file: file,
+            global: options.global,
+            file: options.file,
             no_upgrade: false,
-            verbose: verbose,
-            force: force,
-            quiet: !verbose
+            verbose: options.verbose,
+            force: options.force,
+            quiet: !options.verbose
           )
         end
       end
@@ -609,8 +488,6 @@ module Homebrew
   end
 end
 
-# Special case hook for the main bundle command
-# This will be called by the command dispatcher when `brew bundle` is run
 module Homebrew
   module_function
 

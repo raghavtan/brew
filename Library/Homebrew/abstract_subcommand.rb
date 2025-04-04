@@ -15,49 +15,69 @@ module Homebrew
   # 5. Facilitating improved tab completion by properly organizing command options
   #
   # @api public
-  class AbstractSubcommandableMixin
+  module AbstractSubcommandable
     extend T::Helpers
 
+    sig { returns(T::Hash[String, T.class_of(AbstractSubcommand)]) }
+    def subcommands
+      self.class.subcommands
+    end
+
+    sig { void }
+    def self.included(base)
+      base.extend(ClassMethods)
+
+      base.singleton_class.prepend(Module.new do
+        def inherited(subclass)
+          super
+
+          at_exit do
+            subclass.register_all_subcommands
+          end
+        end
+      end)
+    end
+
     module ClassMethods
-      # Maps subcommand names to their corresponding classes
       sig { returns(T::Hash[String, T.class_of(AbstractSubcommand)]) }
       def subcommands
         @subcommands ||= T.let({}, T::Hash[String, T.class_of(AbstractSubcommand)])
       end
 
-      # Define a subcommand that is triggerable by one or more alias names
+      sig { void }
+      def register_all_subcommands
+        constants.each do |const_name|
+          const = const_get(const_name)
+          if const.is_a?(Class) && const < AbstractSubcommand
+            register_subcommand(const)
+          end
+        end
+      end
+
       sig { params(subcommand_class: T.class_of(AbstractSubcommand), aliases: T::Array[String]).void }
       def register_subcommand(subcommand_class, aliases = [])
         primary_name = subcommand_class.command_name
         subcommands[primary_name] = subcommand_class
-        
+
         aliases.each do |alias_name|
           subcommands[alias_name] = subcommand_class
         end
       end
 
-      # Defines shared arguments that apply to all subcommands
       sig { params(block: T.proc.bind(CLI::Parser).void).void }
       def shared_args(&block)
         @shared_args_block = T.let(block, T.nilable(T.proc.void))
       end
 
-      # Access the shared arguments block to apply to subcommands
       sig { returns(T.nilable(T.proc.void)) }
       def shared_args_block
         @shared_args_block
       end
     end
-
-    # Include the class methods
-    sig { void }
-    def self.included(base)
-      base.extend(ClassMethods)
-    end
   end
 
   # Base class for all subcommands
-  # 
+  #
   # Subcommands implement their own argument parsing and help text generation
   # while inheriting shared arguments from their parent command.
   #
@@ -76,69 +96,81 @@ module Homebrew
              .tr("_", "-")
       end
 
-      # Get all the names (primary and aliases) for this subcommand
       sig { returns(T::Array[String]) }
       def command_names
-        # Get parent command's subcommands hash
         parent_command_class.subcommands.select { |_, klass| klass == self }.keys
       end
 
-      # Returns the parent command class for this subcommand
       sig { returns(T.class_of(AbstractCommand)) }
       def parent_command_class
-        # Extract parent command class from module hierarchy
         parent_module = self.name.split("::")[0..-2].join("::")
         Object.const_get(parent_module)
       end
 
-      # Create a parser that inherits shared arguments from the parent command
       sig { returns(CLI::Parser) }
       def parser
         parent_class = parent_command_class
-        
-        # Create a new parser with our specific cmd_args block
         parser = CLI::Parser.new(self, &@parser_block)
-        
-        # Apply the parent's shared arguments if available
         if parent_class.respond_to?(:shared_args_block) && parent_class.shared_args_block
           parser.instance_eval(&parent_class.shared_args_block)
         end
-        
+
         parser
       end
     end
 
-    # The implementation for the subcommand
+    sig { returns(T::Hash[Symbol, T.untyped]) }
+    def common_args
+      {
+        global: args.global?,
+        file: args.file,
+        verbose: args.verbose?
+      }
+    end
+
     sig { abstract.void }
     def run; end
   end
 
-  # Adds subcommand dispatching capabilities to AbstractCommand
-  # This module should be included in command classes that want to support subcommands
-  module SubcommandDispatchMixin
-    # Dispatch to the appropriate subcommand based on the arguments
+
+  module SubcommandDispatcher
     sig { params(subcommand_name: T.nilable(String), args: T::Array[String]).returns(T::Boolean) }
     def dispatch_subcommand(subcommand_name, args = [])
       return false unless subcommand_name
 
-      subcommand_class = self.class.subcommands[subcommand_name]
+      subcommand_class = subcommands[subcommand_name]
       return false unless subcommand_class
 
-      # Create and run the subcommand with the remaining arguments
       subcommand_class.new(args).run
       true
     end
-    
-    # Generate a list of available subcommands for help text
+
     sig { returns(String) }
     def available_subcommands_help
-      subcommands = self.class.subcommands.keys.uniq.sort
-      return "" if subcommands.empty?
-      
+      cmd_list = subcommands.keys.uniq.sort
+      return "" if cmd_list.empty?
+
       <<~EOS
         Available subcommands:
-          #{subcommands.join(", ")}
+          #{cmd_list.join(", ")}
       EOS
+    end
+  end
+
+
+  module TargetableCommand
+    sig { params(loaded: T::Boolean).returns(T::Array[T.untyped]) }
+    def get_targets(loaded: true)
+      if args.all?
+        Services::Formulae.available_services(
+          loaded: loaded,
+          skip_root: !Services::System.root?
+        )
+      elsif args.named_args.present?
+        args.named_args.map { |f| Services::FormulaWrapper.new(Formulary.factory(f)) }
+      else
+        []
+      end
     end
   end
 end

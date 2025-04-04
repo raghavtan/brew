@@ -6,14 +6,14 @@ require "abstract_subcommand"
 require "subcommand_parser"
 require "services"
 require "services/system"
+require "command_options"
 
 module Homebrew
   module Cmd
     class ServicesNew < AbstractCommand
-      include AbstractSubcommandableMixin
-      include SubcommandDispatchMixin
+      include AbstractSubcommandable
+      include SubcommandDispatcher
 
-      # Define shared arguments that apply to all services subcommands
       shared_args do
         usage_banner <<~EOS
           `services` [<subcommand>]
@@ -32,68 +32,80 @@ module Homebrew
 
       sig { override.void }
       def run
-        # pbpaste's exit status is a proxy for detecting the use of reattach-to-user-namespace
-        if OS.mac? && ENV.fetch("HOMEBREW_TMUX", nil) && File.exist?("/usr/bin/pbpaste") && !quiet_system("/usr/bin/pbpaste")
+        # Check for tmux compatibility
+        if ENV.fetch("HOMEBREW_TMUX", nil) && File.exist?("/usr/bin/pbpaste") && !quiet_system("/usr/bin/pbpaste")
           raise UsageError, "`brew services` cannot run under tmux!"
         end
 
-        # Validate service system availability
+        # Validate system requirements
         if !Services::System.launchctl? && !Services::System.systemctl?
           raise UsageError, "`brew services` is supported only on macOS or Linux (with systemd)!"
         end
 
         # Handle sudo service user
-        if (sudo_service_user = args.sudo_service_user)
-          unless Services::System.root?
-            raise UsageError, "`brew services` is supported only when running as root!"
-          end
+        setup_sudo_service_user
 
-          unless Services::System.launchctl?
-            raise UsageError,
-                  "`brew services --sudo-service-user` is currently supported only on macOS " \
-                  "(but we'd love a PR to add Linux support)!"
-          end
+        # Setup systemd environment variables if needed
+        setup_systemd_environment if Services::System.systemctl?
 
-          Services::Cli.sudo_service_user = sudo_service_user
-        end
-
-        # Set environment variables for systemctl if needed
-        if Services::System.systemctl?
-          ENV["DBUS_SESSION_BUS_ADDRESS"] = ENV.fetch("HOMEBREW_DBUS_SESSION_BUS_ADDRESS", nil)
-          ENV["XDG_RUNTIME_DIR"] = ENV.fetch("HOMEBREW_XDG_RUNTIME_DIR", nil)
-        end
-
-        # Parse and extract subcommand name and the remaining arguments
+        # Parse and dispatch subcommand
         subcommand_name, remaining_args = Homebrew::SubcommandParser.parse_subcommand(args.remaining_args, self)
 
-        # Handle the case where no subcommand is specified
         if subcommand_name.nil?
-          # Default to "list" if no subcommand is specified
-          dispatch_subcommand("list", remaining_args) || raise(UsageError, "No subcommand specified. Try `brew services list`")
+          dispatch_subcommand("list", remaining_args) || raise(UsageError, "No subcommand specified.")
           return
         end
 
-        # Dispatch to the appropriate subcommand
         unless dispatch_subcommand(subcommand_name, remaining_args)
           raise UsageError, "Unknown subcommand: #{subcommand_name}"
         end
+      end
+
+      private
+
+      def setup_sudo_service_user
+        return unless (sudo_service_user = args.sudo_service_user)
+
+        unless Services::System.root?
+          raise UsageError, "`brew services` is supported only when running as root!"
+        end
+
+        unless Services::System.launchctl?
+          raise UsageError,
+                "`brew services --sudo-service-user` is currently supported only on macOS!"
+        end
+
+        Services::Cli.sudo_service_user = sudo_service_user
+      end
+
+      def setup_systemd_environment
+        ENV["DBUS_SESSION_BUS_ADDRESS"] = ENV.fetch("HOMEBREW_DBUS_SESSION_BUS_ADDRESS", nil)
+        ENV["XDG_RUNTIME_DIR"] = ENV.fetch("HOMEBREW_XDG_RUNTIME_DIR", nil)
       end
     end
   end
 end
 
-# Define the services subcommands as separate classes
 module Homebrew
   module Cmd
     class ServicesNew
-      # List subcommand
+      # Base class for services subcommands that need to work with targets
+      class TargetableSubcommand < AbstractSubcommand
+        include TargetableCommand
+
+        private
+
+        # Check if all targets is empty and return early if true
+        sig { params(targets: T::Array[T.untyped]).returns(T::Boolean) }
+        def check_empty_targets(targets)
+          return false unless args.all? && targets.empty?
+          true
+        end
+      end
+
       class List < AbstractSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `services list` (`--json`) (`--debug`)
-
-            List information about all managed services for the current user (or root).
-          EOS
+          usage_banner "`services list` (`--json`)"
         end
 
         sig { override.void }
@@ -103,347 +115,148 @@ module Homebrew
         end
       end
 
-      # Info subcommand
       class Info < AbstractSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `services info` (<formula>|`--all`|`--json`)
-
-            List information about all managed services for the current user (or root).
-          EOS
+          usage_banner "`services info` (<formula>|`--all`|`--json`)"
         end
 
         sig { override.void }
         def run
           require "services/commands/info"
-
-          # Create formula wrappers for each named formula
-          targets = if args.named_args.present?
-            args.named_args.map { |formula| Services::FormulaWrapper.new(Formulary.factory(formula)) }
-          else
-            []
-          end
-
-          Services::Commands::Info.run(
-            targets: targets,
-            verbose: args.verbose?,
-            json: args.json?
-          )
+          targets = args.named_args.present? ? args.named_args.map { |f| Services::FormulaWrapper.new(Formulary.factory(f)) } : []
+          Services::Commands::Info.run(targets: targets, verbose: args.verbose?, json: args.json?)
         end
       end
 
-      # Run subcommand
-      class Run < AbstractSubcommand
+      class Run < TargetableSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `services run` (<formula>|`--all`|`--file=`)
-
-            Run the service <formula> without registering to launch at login (or boot).
-          EOS
-
-          flag "--file=",
-               description: "Use the service file from this location to run the service."
-          flag "--max-wait=",
-               description: "Wait at most this many seconds for the service to finish starting. " \
-                            "Omit this flag or set this to zero (0) seconds to wait indefinitely."
-          switch "--no-wait",
-                 description: "Don't wait for the service to finish starting."
+          usage_banner "`services run` (<formula>|`--all`|`--file=`)"
+          flag "--file=", description: "Use the service file from this location"
+          flag "--max-wait=", description: "Wait this many seconds for service to start"
+          switch "--no-wait", description: "Don't wait for service to start"
         end
 
         sig { override.void }
         def run
           require "services/commands/run"
+          options = CommandOptions.new(args)
+          wait = args.no_wait? ? false : (args.max_wait.to_f.positive? ? args.max_wait.to_f : true)
 
-          # Determine wait behavior
-          wait = if args.no_wait?
-            false
-          elsif args.max_wait.to_f.positive?
-            args.max_wait.to_f
-          else
-            true
-          end
-
-          # File-based run
           if args.file.present?
-            Services::Commands::Run.run(
-              file: args.file,
-              wait: wait,
-              verbose: args.verbose?
-            )
+            Services::Commands::Run.run(file: args.file, wait: wait, verbose: options.verbose)
             return
           end
 
-          # Create formula wrappers for each formula or all formulae
-          targets = get_service_targets
-
-          Services::Commands::Run.run(
-            targets: targets,
-            wait: wait,
-            verbose: args.verbose?
-          )
-        end
-
-        private
-
-        # Get the target services based on user input
-        sig { returns(T::Array[Services::FormulaWrapper]) }
-        def get_service_targets
-          if args.all?
-            Services::Formulae.available_services(
-              loaded: false,
-              skip_root: !Services::System.root?
-            )
-          elsif args.named_args.present?
-            args.named_args.map { |formula| Services::FormulaWrapper.new(Formulary.factory(formula)) }
-          else
-            []
-          end
+          targets = get_targets(loaded: false)
+          return if check_empty_targets(targets)
+          Services::Commands::Run.run(targets: targets, wait: wait, verbose: options.verbose)
         end
       end
 
-      # Start subcommand
-      class Start < AbstractSubcommand
+      class Start < TargetableSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `services start` (<formula>|`--all`|`--file=`)
-
-            Start the service <formula> immediately and register it to launch at login (or boot).
-          EOS
-
-          flag "--file=",
-               description: "Use the service file from this location to start the service."
+          usage_banner "`services start` (<formula>|`--all`|`--file=`)"
+          flag "--file=", description: "Use the service file from this location"
         end
 
         sig { override.void }
         def run
-          require "services/cli"
           require "services/commands/start"
+          options = CommandOptions.new(args)
 
-          # If a file is specified, start the service from the file
           if args.file.present?
-            Services::Commands::Start.run(
-              [],  # No targets when using a file
-              args.file,
-              verbose: args.verbose?
-            )
+            Services::Commands::Start.run([], args.file, verbose: options.verbose)
             return
           end
 
-          # Create formula wrappers for each formula or all formulae
-          targets = get_service_targets
-
-          # Exit if there's nothing to do
-          return if args.all? && targets.empty?
-
-          # Run the start command
-          Services::Commands::Start.run(
-            targets,
-            nil,  # No file
-            verbose: args.verbose?
-          )
-        end
-
-        private
-
-        # Get the target services based on user input
-        sig { returns(T::Array[Services::FormulaWrapper]) }
-        def get_service_targets
-          if args.all?
-            Services::Formulae.available_services(
-              loaded: false,
-              skip_root: !Services::System.root?
-            )
-          elsif args.named_args.present?
-            args.named_args.map { |formula| Services::FormulaWrapper.new(Formulary.factory(formula)) }
-          else
-            []
-          end
+          targets = get_targets(loaded: false)
+          return if check_empty_targets(targets)
+          Services::Commands::Start.run(targets, nil, verbose: options.verbose)
         end
       end
 
-      # Stop subcommand
-      class Stop < AbstractSubcommand
+      class Stop < TargetableSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `services stop` (<formula>|`--all`)
-
-            Stop the service <formula> if it is running.
-          EOS
-
-          flag "--max-wait=",
-               description: "Wait at most this many seconds for the service to finish stopping."
-          switch "--no-wait",
-               description: "Don't wait for the service to finish stopping."
-          switch "--keep",
-               description: "Keep the service unloaded from the service manager but don't stop it."
+          usage_banner "`services stop` (<formula>|`--all`)"
+          flag "--max-wait=", description: "Wait this many seconds for service to stop"
+          switch "--no-wait", description: "Don't wait for service to stop"
+          switch "--keep", description: "Keep the service registered"
         end
 
         sig { override.void }
         def run
           require "services/commands/stop"
+          options = CommandOptions.new(args)
 
-          # Create formula wrappers for each formula or all formulae
-          targets = get_service_targets
+          targets = get_targets(loaded: true)
+          return if check_empty_targets(targets)
 
-          # Exit if there's nothing to do
-          return if args.all? && targets.empty?
-
-          # Determine wait behavior
-          no_wait = args.no_wait?
-          max_wait = args.max_wait.to_f
-
-          # Run the stop command
           Services::Commands::Stop.run(
             targets,
-            verbose: args.verbose?,
-            no_wait: no_wait,
-            max_wait: max_wait,
-            keep: args.keep?
+            verbose: options.verbose,
+            no_wait: options.no_wait,
+            max_wait: options.max_wait,
+            keep: options.keep
           )
-        end
-
-        private
-
-        # Get the target services based on user input
-        sig { returns(T::Array[Services::FormulaWrapper]) }
-        def get_service_targets
-          if args.all?
-            Services::Formulae.available_services(
-              loaded: true,
-              skip_root: !Services::System.root?
-            )
-          elsif args.named_args.present?
-            args.named_args.map { |formula| Services::FormulaWrapper.new(Formulary.factory(formula)) }
-          else
-            []
-          end
         end
       end
 
-      # Kill subcommand
-      class Kill < AbstractSubcommand
+      class Kill < TargetableSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `services kill` (<formula>|`--all`)
-
-            Kill the service <formula> if it is running.
-          EOS
+          usage_banner "`services kill` (<formula>|`--all`)"
         end
 
         sig { override.void }
         def run
           require "services/commands/kill"
+          options = CommandOptions.new(args)
 
-          # Create formula wrappers for each formula or all formulae
-          targets = get_service_targets
-
-          # Exit if there's nothing to do
-          return if args.all? && targets.empty?
-
-          # Run the kill command
-          Services::Commands::Kill.run(
-            targets: targets,
-            verbose: args.verbose?
-          )
-        end
-
-        private
-
-        # Get the target services based on user input
-        sig { returns(T::Array[Services::FormulaWrapper]) }
-        def get_service_targets
-          if args.all?
-            Services::Formulae.available_services(
-              loaded: true,
-              skip_root: !Services::System.root?
-            )
-          elsif args.named_args.present?
-            args.named_args.map { |formula| Services::FormulaWrapper.new(Formulary.factory(formula)) }
-          else
-            []
-          end
+          targets = get_targets(loaded: true)
+          return if check_empty_targets(targets)
+          Services::Commands::Kill.run(targets: targets, verbose: options.verbose)
         end
       end
 
-      # Restart subcommand
-      class Restart < AbstractSubcommand
+      class Restart < TargetableSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `services restart` (<formula>|`--all`)
-
-            Stop (if necessary) and start the service <formula>.
-          EOS
-
-          flag "--max-wait=",
-               description: "Wait at most this many seconds for a service to finish stopping/starting."
-          switch "--no-wait",
-               description: "Don't wait for services to finish stopping/starting."
+          usage_banner "`services restart` (<formula>|`--all`)"
+          flag "--max-wait=", description: "Wait this many seconds for service to stop/start"
+          switch "--no-wait", description: "Don't wait for service to stop/start"
         end
 
         sig { override.void }
         def run
           require "services/commands/restart"
+          options = CommandOptions.new(args)
 
-          # Create formula wrappers for each formula or all formulae
-          targets = get_service_targets
+          targets = get_targets(loaded: true)
+          return if check_empty_targets(targets)
 
-          # Exit if there's nothing to do
-          return if args.all? && targets.empty?
-
-          # Determine wait behavior
-          no_wait = args.no_wait?
-          max_wait = args.max_wait.to_f
-
-          # Run the restart command
           Services::Commands::Restart.run(
             targets,
-            verbose: args.verbose?,
-            no_wait: no_wait,
-            max_wait: max_wait
+            verbose: options.verbose,
+            no_wait: options.no_wait,
+            max_wait: options.max_wait
           )
-        end
-
-        private
-
-        # Get the target services based on user input
-        sig { returns(T::Array[Services::FormulaWrapper]) }
-        def get_service_targets
-          if args.all?
-            Services::Formulae.available_services(
-              loaded: true,
-              skip_root: !Services::System.root?
-            )
-          elsif args.named_args.present?
-            args.named_args.map { |formula| Services::FormulaWrapper.new(Formulary.factory(formula)) }
-          else
-            []
-          end
         end
       end
 
-      # Cleanup subcommand
       class Cleanup < AbstractSubcommand
         cmd_args do
-          usage_banner <<~EOS
-            `services cleanup`
-
-            Remove all unused service-related files.
-          EOS
+          usage_banner "`services cleanup`"
         end
 
         sig { override.void }
         def run
           require "services/commands/cleanup"
-
-          Services::Commands::Cleanup.run(verbose: args.verbose?)
+          options = CommandOptions.new(args)
+          Services::Commands::Cleanup.run(verbose: options.verbose)
         end
       end
     end
   end
 end
 
-# Special case hook for the main services command
-# This will be called by the command dispatcher when `brew services` is run
 module Homebrew
   module_function
 
