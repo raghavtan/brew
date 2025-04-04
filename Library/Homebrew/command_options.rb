@@ -3,17 +3,21 @@
 
 module Homebrew
   class CommandOptions
-    # Instance variables
     sig { returns(T::Boolean) }
     attr_reader :global
+
     sig { returns(T::Boolean) }
     attr_reader :verbose
+
     sig { returns(T::Boolean) }
     attr_reader :no_wait
+
     sig { returns(T::Boolean) }
     attr_reader :keep
+
     sig { returns(T::Boolean) }
     attr_reader :zap
+
     sig { returns(T::Boolean) }
     attr_reader :force
 

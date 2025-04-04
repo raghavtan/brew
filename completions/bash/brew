@@ -678,7 +678,7 @@ _brew_bundle() {
       ;;
     *) ;;
   esac
-  __brewcomp "install dump cleanup check exec list sh env edit"
+  __brewcomp "install dump cleanup check exec list sh env edit add remove"
 }
 
 _brew_casks() {

@@ -20,16 +20,12 @@ module Homebrew
     include Kernel
 
     module ClassWithSubcommands
-      extend T::Sig
       include Kernel
-      
+
       sig { returns(T::Hash[String, T.class_of(AbstractSubcommand)]) }
       def subcommands
-        # Use instance_variable_defined? instead of ||= to explicitly check for nil
         @subcommands = T.let(@subcommands, T.nilable(T::Hash[String, T.class_of(AbstractSubcommand)]))
-        if @subcommands.nil?
-          @subcommands = {}
-        end
+        @subcommands = {} if @subcommands.nil?
         @subcommands
       end
 
@@ -54,7 +50,7 @@ module Homebrew
 
     sig { returns(T::Hash[String, T.class_of(AbstractSubcommand)]) }
     def subcommands
-      parent_class = T.cast(Object.instance_method(:class).bind_call(self), 
+      parent_class = T.cast(Object.instance_method(:class).bind_call(self),
                             T.all(T.class_of(AbstractCommand), ClassWithSubcommands))
       parent_class.subcommands
     end
@@ -65,9 +61,8 @@ module Homebrew
       base.extend(ClassWithSubcommands)
 
       base.singleton_class.prepend(Module.new do
-        extend T::Sig
         include Kernel
-        
+
         sig { params(subclass: T.class_of(AbstractCommand)).void }
         def inherited(subclass)
           super
@@ -80,8 +75,6 @@ module Homebrew
     end
 
     module ClassMethods
-      extend T::Sig
-      
       sig { params(block: T.proc.bind(CLI::Parser).void).void }
       def shared_args(&block)
         @shared_args_block = T.let(block, T.nilable(T.proc.void))
@@ -107,9 +100,8 @@ module Homebrew
     abstract!
 
     class << self
-      extend T::Sig
       include Kernel
-      
+
       sig { returns(String) }
       def command_name
         require "utils"
@@ -136,21 +128,16 @@ module Homebrew
       def parser
         parent_class = T.cast(parent_command_class, AbstractSubcommandMod::ClassMethods)
         parser = CLI::Parser.new(self, &@parser_block)
-        
-        # Check if method exists using our knowledge of the class structure
+
         shared_block = parent_class.shared_args_block
-        if shared_block
-          parser.instance_eval(&T.unsafe(shared_block))
-        end
+        parser.instance_eval(&T.unsafe(shared_block)) if shared_block
 
         parser
       end
     end
 
-    # Common arguments shared between commands
     sig { returns(T::Hash[Symbol, T.untyped]) }
     def common_args
-      # These methods come from CLI::Args
       args_obj = T.unsafe(args)
       {
         global:  args_obj.respond_to?(:global?) ? args_obj.global? : false,
@@ -163,18 +150,14 @@ module Homebrew
     def run; end
   end
 
-  # The SubcommandDispatcher module provides functionality to dispatch subcommands
-  # and generate help text for subcommands.
   module SubcommandDispatcher
-    extend T::Sig
     extend T::Helpers
-    
-    # This is a mixin module that expects implementers to define subcommands
+
     abstract!
-    
+
     sig { abstract.returns(T::Hash[String, T.class_of(AbstractSubcommand)]) }
     def subcommands; end
-    
+
     sig { params(subcommand_name: T.nilable(String), args: T::Array[String]).returns(T::Boolean) }
     def dispatch_subcommand(subcommand_name, args = [])
       return false unless subcommand_name
@@ -199,26 +182,27 @@ module Homebrew
   end
 
   module TargetableCommand
-    extend T::Sig
     include Kernel
-    
+
     sig { params(loaded: T::Boolean).returns(T::Array[T.untyped]) }
     def get_targets(loaded: true)
-      # Properly access args, which is assumed to be available as an instance variable
-      # or method in the including class
       local_args = T.let(
-        Kernel.instance_variable_defined?(:@args) ? Kernel.instance_variable_get(:@args) : 
-        (Kernel.respond_to?(:args) ? Kernel.send(:args) : nil),
-        T.untyped
+        if Kernel.instance_variable_defined?(:@args)
+          Kernel.instance_variable_get(:@args)
+        else
+          (Kernel.respond_to?(:args) ? Kernel.send(:args) : nil)
+        end,
+        T.untyped,
       )
-      
+
       if local_args.respond_to?(:all?) && local_args.all?
         Services::Formulae.available_services(
           loaded:    loaded,
           skip_root: !Services::System.root?,
         )
-      elsif local_args.respond_to?(:named_args) && local_args.named_args.respond_to?(:present?) && local_args.named_args.present?
-        local_args.named_args.map do |f| 
+      elsif local_args.respond_to?(:named_args) && local_args.named_args.respond_to?(:present?) &&
+            local_args.named_args.present?
+        local_args.named_args.map do |f|
           Services::FormulaWrapper.new(Formulary.factory(T.cast(f, T.any(Pathname, String))))
         end
       else

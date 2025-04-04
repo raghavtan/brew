@@ -7,8 +7,6 @@ require "cli/error"
 module Homebrew
   # Helper module for parsing subcommands and their arguments
   module SubcommandParser
-    extend T::Sig
-    
     # Parse command line arguments for a command with subcommands
     #
     # This extracts the subcommand name and remaining arguments,
@@ -36,9 +34,6 @@ module Homebrew
     end
 
     class << self
-      extend T::Sig
-      
-      # Handle the help flag for the parent command
       sig {
         params(
           args:           T::Array[String],
@@ -54,7 +49,6 @@ module Homebrew
         false
       end
 
-      # Extract the subcommand name and arguments from command line arguments
       sig { params(args: T::Array[String]).returns([T.nilable(String), T::Array[String]]) }
       def extract_subcommand(args)
         return [nil, args] if args.empty?
@@ -65,18 +59,12 @@ module Homebrew
           subcommand_name = first_non_flag
 
           subcommand_index = args.index(subcommand_name)
-          
-          if subcommand_index.nil?
-            return [nil, args]
-          end
-          
+
+          return [nil, args] if subcommand_index.nil?
+
           before_args = args[0...subcommand_index]
           after_args = args[(subcommand_index + 1)..]
-          
-          # Handle case where after_args is nil (if subcommand is the last argument)
           actual_after_args = after_args.nil? ? [] : after_args
-          
-          # Now we know both arrays exist
           remaining_args = T.must(before_args) + actual_after_args
           return [subcommand_name, remaining_args]
         end
@@ -84,7 +72,6 @@ module Homebrew
         [nil, args]
       end
 
-      # Handle help flag for a specific subcommand
       sig {
         params(
           args:            T::Array[String],
@@ -96,7 +83,6 @@ module Homebrew
         return false if args.exclude?("--help") && args.exclude?("-h")
         return false unless subcommand_name
 
-        # We already know parent_command implements SubcommandDispatcher
         command_class = parent_command.subcommands[subcommand_name]
         if command_class
           puts command_class.parser.generate_help_text

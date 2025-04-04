@@ -187,12 +187,12 @@ By default, only Homebrew formula dependencies are listed.
 
 : Edit the `Brewfile` in your editor.
 
-`brew bundle add` *`name`* \[...\]
+`brew bundle add` *`n`* \[...\]
 
 : Add entries to your `Brewfile`. Adds formulae by default. Use `--cask`,
   `--tap`, `--whalebrew` or `--vscode` to add the corresponding entry instead.
 
-`brew bundle remove` *`name`* \[...\]
+`brew bundle remove` *`n`* \[...\]
 
 : Remove entries that match `name` from your `Brewfile`. Use `--formula`,
   `--cask`, `--tap`, `--mas`, `--whalebrew` or `--vscode` to remove only entries
