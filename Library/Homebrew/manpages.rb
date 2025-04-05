@@ -115,6 +115,7 @@ module Homebrew
 
       command_name = cmd_parser.instance_variable_get(:@command_name)
       return lines unless command_name
+
       cmd_path = Commands.path(command_name)
       if cmd_path&.file? && cmd_path.extname == ".rb"
         begin
@@ -133,6 +134,7 @@ module Homebrew
                   /class\s+#{subcommand_class}Subcommand\s+<\s+AbstractSubcommand(.*?)end\s+class/m,
                 )
                 next unless subcommand_class_match
+
                 subcommand_def = subcommand_class_match[0]
                 cmd_args_match = subcommand_def.match(/cmd_args\s+do(.*?)end/m)
                 next unless cmd_args_match
@@ -163,7 +165,8 @@ module Homebrew
               end
             end
           end
-        rescue
+        rescue => e
+          raise "Error processing command file #{cmd_path}: #{e}"
         end
       end
 

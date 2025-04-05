@@ -196,6 +196,7 @@ module Homebrew
           named_args_strings.each do |subcommand|
             subcommand_options = command_options(command, subcommand)
             next if subcommand_options.empty?
+
             subcommand_functions << <<~SUBCOMPLETION
               _brew_#{Commands.method_name command}_#{subcommand.tr("-", "_")}() {
                 local cur="${COMP_WORDS[COMP_CWORD]}"
@@ -460,7 +461,7 @@ module Homebrew
 
         named_args_strings.each do |subcommand|
           subcommands << "__fish_brew_complete_sub_cmd '#{command}' '#{subcommand}'"
-          
+
           subcmd_options = command_options(command, subcommand)
           next if subcmd_options.empty?
 

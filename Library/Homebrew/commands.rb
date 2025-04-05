@@ -263,7 +263,8 @@ module Commands
             named_args.uniq!
           end
         end
-      rescue
+      rescue => e
+        raise "Error processing command file #{path}: #{e}"
       end
     end
 
